@@ -15,29 +15,26 @@ Deno.serve(async (req) => {
     });
 
     const html = await res.text();
-    return json(parseHtml(html, targetUrl));
+    const result = parseHtml(html, targetUrl);
+
+    return json(result);
   } catch (err) {
     return json({ error: "Failed to fetch", details: err.message }, 500);
   }
 });
 
 function parseHtml(html: string, url: string) {
-  const result: any = {
-    url,
-    title: "",
-    metadata: {
-      open_graph: {} as Record<string, string>,
-      twitter: {} as Record<string, string>,
-      standard: {} as Record<string, string>,
-      others: [] as any[]
-    }
+  // On crée un objet de base avec l'URL et le titre
+  const metadata: Record<string, any> = {
+    url: url,
+    title: ""
   };
 
-  // 1. Extraction du titre classique
+  // 1. Extraction du titre HTML standard
   const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  result.title = titleMatch ? titleMatch[1].trim() : "";
+  if (titleMatch) metadata.title = titleMatch[1].trim();
 
-  // 2. Extraction et tri des Metas
+  // 2. Extraction de toutes les balises meta
   const metaRegex = /<meta\s+([^>]+)>/gi;
   const attrRegex = /([a-zA-Z0-9:_-]+)\s*=\s*["']([^"']*)["']/gi;
 
@@ -45,31 +42,33 @@ function parseHtml(html: string, url: string) {
   while ((match = metaRegex.exec(html))) {
     const attrs: Record<string, string> = {};
     let attrMatch;
+    
+    // On extrait tous les attributs de la balise
     while ((attrMatch = attrRegex.exec(match[1]))) {
       attrs[attrMatch[1].toLowerCase()] = attrMatch[2];
     }
 
-    // Extraction de la clé (name, property ou http-equiv) et de la valeur (content)
-    const key = attrs.name || attrs.property || attrs["http-equiv"];
+    // On détermine quelle est la clé (name, property, http-equiv ou itemprop)
+    const key = attrs.name || attrs.property || attrs["http-equiv"] || attrs.itemprop;
     const content = attrs.content;
 
-    if (key && content) {
-      if (key.startsWith("og:")) {
-        result.metadata.open_graph[key.replace("og:", "")] = content;
-      } else if (key.startsWith("twitter:")) {
-        result.metadata.twitter[key.replace("twitter:", "")] = content;
-      } else if (["description", "keywords", "author", "viewport"].includes(key)) {
-        result.metadata.standard[key] = content;
+    if (key && content !== undefined) {
+      // Si la clé existe déjà (ex: plusieurs og:image), on en fait un tableau
+      if (metadata[key]) {
+        if (Array.isArray(metadata[key])) {
+          metadata[key].push(content);
+        } else {
+          metadata[key] = [metadata[key], content];
+        }
       } else {
-        result.metadata.others.push({ [key]: content });
+        metadata[key] = content;
       }
-    } else if (Object.keys(attrs).length > 0) {
-      // Cas particuliers comme <meta charset="utf-8">
-      result.metadata.others.push(attrs);
+    } else if (attrs.charset) {
+      metadata["charset"] = attrs.charset;
     }
   }
 
-  return result;
+  return metadata;
 }
 
 function json(data: unknown, status = 200) {
