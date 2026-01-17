@@ -7,37 +7,37 @@ Deno.serve(async (req) => {
   try {
     const res = await fetch(targetUrl, {
       headers: {
-        // 1. On se fait passer pour le bot de Facebook (très efficace pour Maps)
         "user-agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "accept-language": "fr-FR,fr;q=0.9",
-        // 2. On ajoute un cookie de consentement pour éviter la page de barrière Google
+        "accept": "text/html",
         "cookie": "CONSENT=YES+cb.20240117-07-p0.fr+FX+901;",
       },
       redirect: "follow",
     });
 
     const html = await res.text();
-    const parsed = parseHtml(html);
-
-    return json({
-      url: targetUrl,
-      ...parsed
-    });
+    return json(parseHtml(html, targetUrl));
   } catch (err) {
     return json({ error: "Failed to fetch", details: err.message }, 500);
   }
 });
 
-function parseHtml(html: string) {
-  const metas: Record<string, string>[] = [];
-  
-  // Titre
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const title = titleMatch ? titleMatch[1].trim() : null;
+function parseHtml(html: string, url: string) {
+  const result: any = {
+    url,
+    title: "",
+    metadata: {
+      open_graph: {} as Record<string, string>,
+      twitter: {} as Record<string, string>,
+      standard: {} as Record<string, string>,
+      others: [] as any[]
+    }
+  };
 
-  // Extraction de TOUTES les balises meta de manière exhaustive
-  // Cette regex est plus permissive sur les espaces et les retours à la ligne
+  // 1. Extraction du titre classique
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  result.title = titleMatch ? titleMatch[1].trim() : "";
+
+  // 2. Extraction et tri des Metas
   const metaRegex = /<meta\s+([^>]+)>/gi;
   const attrRegex = /([a-zA-Z0-9:_-]+)\s*=\s*["']([^"']*)["']/gi;
 
@@ -48,10 +48,28 @@ function parseHtml(html: string) {
     while ((attrMatch = attrRegex.exec(match[1]))) {
       attrs[attrMatch[1].toLowerCase()] = attrMatch[2];
     }
-    if (Object.keys(attrs).length > 0) metas.push(attrs);
+
+    // Extraction de la clé (name, property ou http-equiv) et de la valeur (content)
+    const key = attrs.name || attrs.property || attrs["http-equiv"];
+    const content = attrs.content;
+
+    if (key && content) {
+      if (key.startsWith("og:")) {
+        result.metadata.open_graph[key.replace("og:", "")] = content;
+      } else if (key.startsWith("twitter:")) {
+        result.metadata.twitter[key.replace("twitter:", "")] = content;
+      } else if (["description", "keywords", "author", "viewport"].includes(key)) {
+        result.metadata.standard[key] = content;
+      } else {
+        result.metadata.others.push({ [key]: content });
+      }
+    } else if (Object.keys(attrs).length > 0) {
+      // Cas particuliers comme <meta charset="utf-8">
+      result.metadata.others.push(attrs);
+    }
   }
 
-  return { title, metas };
+  return result;
 }
 
 function json(data: unknown, status = 200) {
