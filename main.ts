@@ -3,16 +3,10 @@ Deno.serve(async (req) => {
   const targetUrl = searchParams.get("url");
 
   if (!targetUrl) {
-    return new Response(
-      JSON.stringify({ error: "Missing url parameter" }),
-      {
-        status: 400,
-        headers: { "content-type": "application/json" },
-      }
-    );
+    return json({ error: "Missing url parameter" }, 400);
   }
 
-  let html = "";
+  let html: string;
 
   try {
     const res = await fetch(targetUrl, {
@@ -25,23 +19,62 @@ Deno.serve(async (req) => {
     });
 
     html = await res.text();
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: "Fetch failed" }),
-      { status: 500 }
-    );
+  } catch {
+    return json({ error: "Failed to fetch URL" }, 500);
   }
 
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  const title = titleMatch ? titleMatch[1].trim() : null;
+  const parsed = parseHtml(html);
 
-  return new Response(
-    JSON.stringify({
-      url: targetUrl,
-      title,
-    }),
-    {
-      headers: { "content-type": "application/json" },
-    }
-  );
+  return json({
+    url: targetUrl,
+    title: parsed.title,
+    metas: parsed.metas,
+    links: parsed.links,
+  });
 });
+
+/* -------------------- Helpers -------------------- */
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function parseHtml(html: string) {
+  const metas: Record<string, string[]> = {};
+  const links: Record<string, string[]> = {};
+
+  // <title>
+  let title: string | null = null;
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (titleMatch) {
+    title = titleMatch[1].trim();
+  }
+
+  // <meta ...>
+  const metaRegex =
+    /<meta\s+[^>]*(?:name|property|itemprop)=["']([^"']+)["'][^>]*content=["']([^"']*)["'][^>]*>/gi;
+
+  let match;
+  while ((match = metaRegex.exec(html))) {
+    const key = match[1].toLowerCase();
+    const value = match[2].trim();
+    if (!metas[key]) metas[key] = [];
+    metas[key].push(value);
+  }
+
+  // <link ...>
+  const linkRegex =
+    /<link\s+[^>]*rel=["']([^"']+)["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
+
+  while ((match = linkRegex.exec(html))) {
+    const rel = match[1].toLowerCase();
+    const href = match[2].trim();
+    if (!links[rel]) links[rel] = [];
+    links[rel].push(href);
+  }
+
+  return { title, metas, links };
+}
