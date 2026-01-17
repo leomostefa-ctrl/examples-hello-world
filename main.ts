@@ -1,6 +1,4 @@
-import { serve } from "https://deno.land/std/http/server.ts";
-
-serve(async (req) => {
+Deno.serve(async (req) => {
   const { searchParams } = new URL(req.url);
   const targetUrl = searchParams.get("url");
 
