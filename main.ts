@@ -2,79 +2,61 @@ Deno.serve(async (req) => {
   const { searchParams } = new URL(req.url);
   const targetUrl = searchParams.get("url");
 
-  if (!targetUrl) {
-    return json({ error: "Missing url parameter" }, 400);
-  }
-
-  let html: string;
+  if (!targetUrl) return json({ error: "Missing url parameter" }, 400);
 
   try {
     const res = await fetch(targetUrl, {
       headers: {
-        "user-agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        accept: "text/html",
+        // 1. On se fait passer pour le bot de Facebook (très efficace pour Maps)
+        "user-agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "accept-language": "fr-FR,fr;q=0.9",
+        // 2. On ajoute un cookie de consentement pour éviter la page de barrière Google
+        "cookie": "CONSENT=YES+cb.20240117-07-p0.fr+FX+901;",
       },
+      redirect: "follow",
     });
 
-    html = await res.text();
-  } catch {
-    return json({ error: "Failed to fetch URL" }, 500);
+    const html = await res.text();
+    const parsed = parseHtml(html);
+
+    return json({
+      url: targetUrl,
+      ...parsed
+    });
+  } catch (err) {
+    return json({ error: "Failed to fetch", details: err.message }, 500);
   }
-
-  const parsed = parseHtml(html);
-
-  return json({
-    url: targetUrl,
-    title: parsed.title,
-    metas: parsed.metas,
-    links: parsed.links,
-  });
 });
 
-/* -------------------- Helpers -------------------- */
+function parseHtml(html: string) {
+  const metas: Record<string, string>[] = [];
+  
+  // Titre
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const title = titleMatch ? titleMatch[1].trim() : null;
+
+  // Extraction de TOUTES les balises meta de manière exhaustive
+  // Cette regex est plus permissive sur les espaces et les retours à la ligne
+  const metaRegex = /<meta\s+([^>]+)>/gi;
+  const attrRegex = /([a-zA-Z0-9:_-]+)\s*=\s*["']([^"']*)["']/gi;
+
+  let match;
+  while ((match = metaRegex.exec(html))) {
+    const attrs: Record<string, string> = {};
+    let attrMatch;
+    while ((attrMatch = attrRegex.exec(match[1]))) {
+      attrs[attrMatch[1].toLowerCase()] = attrMatch[2];
+    }
+    if (Object.keys(attrs).length > 0) metas.push(attrs);
+  }
+
+  return { title, metas };
+}
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json; charset=utf-8" },
   });
-}
-
-function parseHtml(html: string) {
-  const metas: Record<string, string[]> = {};
-  const links: Record<string, string[]> = {};
-
-  // <title>
-  let title: string | null = null;
-  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  if (titleMatch) {
-    title = titleMatch[1].trim();
-  }
-
-  // <meta ...>
-  const metaRegex =
-    /<meta\s+[^>]*(?:name|property|itemprop)=["']([^"']+)["'][^>]*content=["']([^"']*)["'][^>]*>/gi;
-
-  let match;
-  while ((match = metaRegex.exec(html))) {
-    const key = match[1].toLowerCase();
-    const value = match[2].trim();
-    if (!metas[key]) metas[key] = [];
-    metas[key].push(value);
-  }
-
-  // <link ...>
-  const linkRegex =
-    /<link\s+[^>]*rel=["']([^"']+)["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
-
-  while ((match = linkRegex.exec(html))) {
-    const rel = match[1].toLowerCase();
-    const href = match[2].trim();
-    if (!links[rel]) links[rel] = [];
-    links[rel].push(href);
-  }
-
-  return { title, metas, links };
 }
